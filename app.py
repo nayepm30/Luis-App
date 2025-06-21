@@ -1,16 +1,18 @@
 from flask import Flask, render_template, request, send_from_directory, redirect, url_for
 from PIL import Image
-from rembg import remove
 import os
 import io
+import requests
 
 app = Flask(__name__)
 UPLOAD_FOLDER = 'static/processed'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+# Usar variable de entorno para proteger tu clave API
+REMOVE_BG_API_KEY = os.environ.get('REMOVE_BG_API_KEY')
+
 @app.route('/')
 def index():
-    # Obtener nombre de archivo procesado si viene por parámetro query
     filename = request.args.get('filename')
     return render_template('index.html', filename=filename)
 
@@ -18,31 +20,35 @@ def index():
 def upload():
     if 'image' not in request.files:
         return 'No se encontró la imagen', 400
-    
+
     image_file = request.files['image']
     if image_file.filename == '':
         return 'Nombre de archivo vacío', 400
 
-    # Quitar fondo
-    input_image = image_file.read()
-    output_image_data = remove(input_image)
+    # Enviar imagen a la API de remove.bg
+    response = requests.post(
+        'https://api.remove.bg/v1.0/removebg',
+        files={'image_file': image_file},
+        data={'size': 'auto'},
+        headers={'X-Api-Key': REMOVE_BG_API_KEY}
+    )
 
-    # Convertir a imagen con PIL
-    image_no_bg = Image.open(io.BytesIO(output_image_data)).convert("RGBA")
+    if response.status_code != 200:
+        return f"Error al quitar fondo: {response.status_code} - {response.text}", 500
+
+    # Procesar imagen sin fondo
+    image_no_bg = Image.open(io.BytesIO(response.content)).convert("RGBA")
     image_no_bg.thumbnail((500, 500), Image.LANCZOS)
 
-    # Crear fondo blanco
     background = Image.new("RGBA", (500, 500), (255, 255, 255, 255))
     x = (500 - image_no_bg.width) // 2
     y = (500 - image_no_bg.height) // 2
     background.paste(image_no_bg, (x, y), image_no_bg)
 
-    # Convertir a RGB y guardar
     final_image = background.convert("RGB")
     output_path = os.path.join(UPLOAD_FOLDER, image_file.filename)
     final_image.save(output_path)
 
-    # Redirigir a index con el nombre de la imagen para mostrarla
     return redirect(url_for('index', filename=image_file.filename))
 
 @app.route('/processed/<filename>')
